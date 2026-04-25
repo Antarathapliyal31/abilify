@@ -1,5 +1,4 @@
 .env
-__pycache__
 *.pyc
 *.pyo
 *.pyd
@@ -9,8 +8,12 @@ __pycache__
 *.bak
 *.swp
 *.tmp
-*.DS_Store
-.idea
-.vscode
-*.egg-info
-dist            
+*.DS_Store  
+venv/
+.env
+__pycache__/
+*.pkl
+chroma_db/
+parent_chunk.json
+*.pyc
+     
