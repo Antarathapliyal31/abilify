@@ -114,7 +114,10 @@ def check_source_citation(answer: str) -> str:
 prompt=ChatPromptTemplate.from_messages([("system","""You are a strict clinical answer quality evaluator for an Abilify medical Q&A system.
 
 Your job is to evaluate whether a clinical answer is good enough to return to a patient.
-
+You will receive the answer to evaluate in the {answer} variable.
+Use EXACTLY this answer when calling tools.
+Do NOT paraphrase or shorten the answer.
+Pass the COMPLETE answer text to each tool
 You have four evaluation tools:
 - check_faithfulness: checks if claims are grounded in context
 - check_completeness: checks if question is fully answered

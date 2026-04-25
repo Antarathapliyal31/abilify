@@ -173,49 +173,41 @@ def safety__agent(state: AbilifyState) -> dict:
 
 @observe()
 def evaluation__agent(state: AbilifyState) -> dict:
+    print(f"CURRENT ANSWER: {state['current_answer'][:200]}")
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    state["retrieved_context"] = "\n\n".join([chunk for chunk in retrieved_context])
+    
     response = evaluation_agent.invoke({
-        "question": state["query"],
+        "question": query,
         "answer": state["current_answer"],
-        "context": state["retrieved_context"]
+        "context": retrieved_context
     })
     output = response["output"]
-    if "sufficient" in output.lower():
+    
+    if "sufficient" in output.lower() and "insufficient" not in output.lower():
         return {
             "eval_result": "Satisfied",
             "final_answer": state["current_answer"],
             "retry_count": state.get("retry_count", 0)
         }
     else:
-        return {
+        retry_count = state.get("retry_count", 0) + 1
+        result = {
             "eval_result": "Unsatisfied",
-            "retry_count": state.get("retry_count", 0) + 1
+            "retry_count": retry_count
         }
-
+        if retry_count >= 2:
+            result["final_answer"] = state.get("current_answer",
+                "I could not find sufficient information. Please consult your doctor.")
+        return result
 @observe()
 def route_after_evaluation(state: AbilifyState) -> str:
     if state.get("eval_result") == "Satisfied":
-         {
-            "eval_result": "Satisfied",
-            "final_answer": state["current_answer"],
-            "retry_count": state.get("retry_count", 0)
-        }
-         return "END"
-    else:
-        result = {
-            "eval_result": "Unsatisfied",
-            "retry_count": state.get("retry_count", 0)+1
-        }
-        if state["retry_count"] >= 2:
-            result["final_answer"] = state.get("current_answer", 
-                "I could not find sufficient information. Please consult your doctor.")
-            return "END"
-    
-        else:   
-            return state["previous_agent"]
+        return "END"
+    if state.get("retry_count", 0) >= 2:
+        return "END"
+    return state["previous_agent"]
 
 def supervisor_agent(state: AbilifyState) -> dict:
     return "Donot have enough information for this query. Please consult a medical professional or your doctor for more information."
