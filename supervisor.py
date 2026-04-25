@@ -43,19 +43,31 @@ def agent_decision(state:AbilifyState)->dict:
 
     Return ONLY one of: clinical_agent, drug_interaction_agent, safety_agent
     Nothing else.
+    If any of the three agents response is "I cannot find this", route to supervisor for final answer.
     return dictionary format, example: {{"next":"clinical_agent"}}"""
 
 
 
-def evaluation_agent(state:AbilifyState)->dict:
+def evaluation__agent(state:AbilifyState)->dict:
     response=evaluation_agent.invoke(query=state["query"],answer=state["current_answer"],context=state["retrieved_context"])
     if "sufficient" in response.content.lower():
         return {"next":"Satisfied","eval_result":" Satisfied","retry_count":state["retry_count"]}
     else:
         return {"next":"Unsatisfied", "eval_result":"Unsatisfied","retry_count":state["retry_count"]+1}
 
-#def clinical_agent(state:AbilifyState)->dict:
+def clinical__agent(state:AbilifyState)->dict:
+    response=clinical_agent.invoke(query=state["query"],retrieved_context=state["retrieved_context"])
+    if response.content["found_info"]==False:
+        return {"next":"Unsatisfied","current_ans":response.content["answer"],"previous_agent":"clinical_agent"}
+    else:
+        return {"next":"Satisfied","current_ans":response.content["answer"],"previous_agent":"clinical_agent"}
 
+def drug_interaction__agent(state:AbilifyState)->dict:
+    response=drug_interaction_agent.invoke(query=state["query"],retrieved_context=state["retrieved_context"])
+    if response.content["found_info"]==False:
+        return {"next":"Unsatisfied","current_ans":response.content["answer"],"previous_agent":"drug_interaction_agent"}
+    else:
+        return {"next":"Satisfied","current_ans":response.content["answer"],"previous_agent":"drug_interaction_agent"}
 
 graph=StateGraph(AbilifyState)
 graph.add_node("question_checking",question_checking)
@@ -69,17 +81,19 @@ graph.set_entry_point("question_checking")
 
 graph.add_conditional_edges("question_checking",lambda state:state["next"],{"valid":"agent_decision","invalid":END})
 graph.add_conditional_edges("agent_decision", lambda state:state["next"],{"clinical_agent":"clinical_agent","drug_interaction_agent":"drug_interaction_agent","safety_agent":"safety_agent"})
-graph.add_edge("clinical_agent","evaluation_agent")
-graph.add_edge("drug_interaction_agent","evaluation_agent")
-graph.add_edge("safety_agent","evaluation_agent")
+graph.add_conditional_edges("clinical_agent",lambda state:state["next"],{"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"})
+graph.add_conditional_edges("drug_interaction_agent",lambda state:state["next"],{"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"})
+graph.add_conditional_edges("safety_agent",lambda state:state["next"],{"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"})
+graph.add_edges("supervisor_agent",END)  
+
 def route_after_evaluation(state: AbilifyState) -> str:
     if state["eval_result"] == "Satisfied":
         return "END"
-    return state["previous_agent"]  # dynamic at runtime
+    return state["previous_agent"] 
 
 graph.add_conditional_edges(
     "evaluation_agent",
-    route_after_evaluation,  # reads state at runtime
+    route_after_evaluation,  
     {
         "END": END,
         "clinical_agent": "clinical_agent",
