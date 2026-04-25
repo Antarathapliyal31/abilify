@@ -3,17 +3,13 @@ from langfuse import observe
 from langgraph.checkpoint.memory import MemorySaver
 from state import AbilifyState
 from retrieval import child_chunk_creation,vectorstore_creation,hybrid_search_rerank,attach_parent_context
-from langchain_openai import ChatOpenAI
 import os
-from dotenv import load_dotenv
 from agents.clinical_agent import clinical_agent
 from agents.drug_interaction_agent import drug_interaction_agent
 from agents.safety_agent import safety_agent    
 from agents.evaluation_agent import evaluation_agent
+from llm.llm import llm
 
-load_dotenv()
-
-llm=ChatOpenAI(model="gpt-3.5-turbo",api_key=os.getenv("OPENAI_API_KEY"))
 
 def question_checking(state:AbilifyState)->dict:
     query=state["query"]

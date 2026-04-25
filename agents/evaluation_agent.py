@@ -1,13 +1,9 @@
 from langchain.agents import create_openai_tools_agent,AgentExecutor
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate,MessagesPlaceholder,HumanMessagePromptTemplate,SystemMessagePromptTemplate
 import os
-from dotenv import load_dotenv
 from langfuse import observe
 from langchain_core.tools import tool
-load_dotenv()
-
-llm=ChatOpenAI(model="gpt-3.5-turbo",api_key=os.getenv("OPENAI_API_KEY"))
+from llm.llm import llm
 
 @tool
 def check_faithfulness(question: str, answer: str, context: str) -> str:
