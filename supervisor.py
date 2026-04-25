@@ -1,30 +1,32 @@
-from langgraph.graph import StateGraph,END
+from langgraph.graph import StateGraph, END
 from langfuse import observe
 from langgraph.checkpoint.memory import MemorySaver
 from state import AbilifyState
-from retrieval import child_chunk_creation,vectorstore_creation,hybrid_search_rerank,attach_parent_context
-import os
-from agents.clinical_agent import clinical_agent
-from agents.drug_interaction_agent import drug_interaction_agent
-from agents.safety_agent import safety_agent    
-from agents.evaluation_agent import evaluation_agent
+from agents.clinical_agent import executor as clinical_agent
+from agents.drug_interaction_agent import executor as drug_interaction_agent
+from agents.safety_agent import executor as safety_agent
+from agents.evaluation_agent import executor as evaluation_agent
 from llm.llm import llm
+import json
+from retrieval import hybrid_search_rerank, attach_parent_context
+import os
 
-
-def question_checking(state:AbilifyState)->dict:
-    query=state["query"]
-    prompt=f"""You are a helpful agent that checks if the {query} is a valid question realted to abilify that can be answered.
-    If the question valid, return "valid", if its not valid return "invalid".
-    Output will be a dictionary, exmaple: {{"next":"valid"}} or {{"next":"invalid"}}
+@observe()
+def question_checking(state: AbilifyState) -> dict:
+    query = state["query"]
+    prompt = f"""You are a helpful agent that checks if the {query} is a valid question related to abilify that can be answered.
+    If the question is valid, return "valid", if its not valid return "invalid".
+    Output will be a dictionary, example: {{"next":"valid"}} or {{"next":"invalid"}}
     query:{query}"""
-    response=llm.invoke(prompt)
+    response = llm.invoke(prompt)
     if "valid" in response.content.lower():
-        return {"next":"valid"}
-    else:        
-        return {"next":"invalid"}
-    
-def agent_decision(state:AbilifyState)->dict:
-    prompt=f""" You are a routing agent for an Abilify clinical Q&A system.
+        return {"next": "valid"}
+    else:
+        return {"next": "invalid"}
+
+@observe()
+def agent_decision(state: AbilifyState) -> dict:
+    prompt = f"""You are a routing agent for an Abilify clinical Q&A system.
 
     Based on the user query decide which specialist agent should handle it.
 
@@ -33,67 +35,243 @@ def agent_decision(state:AbilifyState)->dict:
     side effects, dosage, how it works, clinical trials
     
     - drug_interaction_agent: handles questions about combining 
-    Abilify with other medications, drug interactions, 
-    contraindications with other drugs
+    Abilify with other medications, drug interactions
     
     - safety_agent: handles warnings, overdose, black box warnings,
     special populations like pregnant women, elderly, children
 
     Query: {state["query"]}
 
-    Return ONLY one of: clinical_agent, drug_interaction_agent, safety_agent
-    Nothing else.
-    If any of the three agents response is "I cannot find this", route to supervisor for final answer.
-    return dictionary format, example: {{"next":"clinical_agent"}}"""
+    Return ONLY one of these exact words with no punctuation:
+    clinical_agent
+    drug_interaction_agent
+    safety_agent"""
 
+    response = llm.invoke(prompt)
+    content = response.content.strip()
 
-
-def evaluation__agent(state:AbilifyState)->dict:
-    response=evaluation_agent.invoke(query=state["query"],answer=state["current_answer"],context=state["retrieved_context"])
-    if "sufficient" in response.content.lower():
-        return {"next":"Satisfied","eval_result":" Satisfied","retry_count":state["retry_count"]}
+    if "clinical_agent" in content:
+        return {"next": "clinical_agent"}
+    elif "drug_interaction_agent" in content:
+        return {"next": "drug_interaction_agent"}
+    elif "safety_agent" in content:
+        return {"next": "safety_agent"}
     else:
-        return {"next":"Unsatisfied", "eval_result":"Unsatisfied","retry_count":state["retry_count"]+1}
+        return {"next": "clinical_agent"}
 
-def clinical__agent(state:AbilifyState)->dict:
-    response=clinical_agent.invoke(query=state["query"],retrieved_context=state["retrieved_context"])
-    if response.content["found_info"]==False:
-        return {"next":"Unsatisfied","current_ans":response.content["answer"],"previous_agent":"clinical_agent"}
+@observe()
+def clinical__agent(state: AbilifyState) -> dict:
+    query = state["query"]
+    results = hybrid_search_rerank(query)
+    retrieved_context = attach_parent_context(results)
+    
+    response = clinical_agent.invoke({
+        "query": query,
+        "retrieved_context": retrieved_context
+    })
+    output = response["output"]
+    print(f"DEBUG output: {output[:100]}")  # add this
+    print(f"DEBUG type: {type(output)}")    # add this
+    
+    try:
+        clean_output = output.split("Consult a qualified")[0].strip()
+        start = output.find("{")
+        end = output.rfind("}") + 1
+        json_str = output[start:end]
+        print(f"DEBUG json_str: {json_str[:100]}")  # add this
+        result = json.loads(json_str)
+        print(f"DEBUG result: {result}")            # add this
+        
+        if result.get("found_info") == False:
+            return {
+                "next": "Unsatisfied",
+                "current_answer": result["answer"],
+                "previous_agent": "clinical_agent"
+            }
+        print(f"DEBUG returning: {result.get('found_info')}")
+
+        return {
+            "next": "Satisfied",
+            "current_answer": result["answer"],
+            "previous_agent": "clinical_agent"
+        }
+    except Exception as e:
+        print(f"DEBUG exception: {e}")              # add this
+        return {
+            "next": "Satisfied",
+            "current_answer": output,
+            "previous_agent": "clinical_agent"
+        }
+
+@observe()
+def drug_interaction__agent(state: AbilifyState) -> dict:
+    query = state["query"]
+    results = hybrid_search_rerank(query)
+    retrieved_context = attach_parent_context(results)
+    state["retrieved_context"] = "\n\n".join([chunk for chunk in retrieved_context])
+    response = drug_interaction_agent.invoke({
+        "query": state["query"],
+        "retrieved_context": state["retrieved_context"]
+    })
+    output = response["output"]
+    try:
+        start = output.find("{")
+        end = output.rfind("}") + 1
+        json_str = output[start:end]
+        result = json.loads(json_str)
+        if result.get("found_info") == False:
+            return {
+                "next": "Unsatisfied",
+                "current_answer": result["answer"],
+                "previous_agent": "drug_interaction_agent"
+            }
+        return {
+            "next": "Satisfied",
+            "current_answer": result["answer"],
+            "previous_agent": "drug_interaction_agent"
+        }
+    except:
+        return {
+            "next": "Satisfied",
+            "current_answer": output,
+            "previous_agent": "drug_interaction_agent"
+        }
+
+@observe()
+def safety__agent(state: AbilifyState) -> dict:
+    query = state["query"]
+    results = hybrid_search_rerank(query)
+    retrieved_context = attach_parent_context(results)
+    state["retrieved_context"] = "\n\n".join([chunk for chunk in retrieved_context])
+    response = safety_agent.invoke({
+        "query": state["query"],
+        "retrieved_context": state["retrieved_context"]
+    })
+    output = response["output"]
+    try:
+        start = output.find("{")
+        end = output.rfind("}") + 1
+        json_str = output[start:end]
+        result = json.loads(json_str)
+        if result.get("found_info") == False:
+            return {
+                "next": "Unsatisfied",
+                "current_answer": result["answer"],
+                "previous_agent": "safety_agent"
+            }
+        return {
+            "next": "Satisfied",
+            "current_answer": result["answer"],
+            "previous_agent": "safety_agent"
+        }
+    except:
+        return {
+            "next": "Satisfied",
+            "current_answer": output,
+            "previous_agent": "safety_agent"
+        }
+
+@observe()
+def evaluation__agent(state: AbilifyState) -> dict:
+    query = state["query"]
+    results = hybrid_search_rerank(query)
+    retrieved_context = attach_parent_context(results)
+    state["retrieved_context"] = "\n\n".join([chunk for chunk in retrieved_context])
+    response = evaluation_agent.invoke({
+        "question": state["query"],
+        "answer": state["current_answer"],
+        "context": state["retrieved_context"]
+    })
+    output = response["output"]
+    if "sufficient" in output.lower():
+        return {
+            "eval_result": "Satisfied",
+            "final_answer": state["current_answer"],
+            "retry_count": state.get("retry_count", 0)
+        }
     else:
-        return {"next":"Satisfied","current_ans":response.content["answer"],"previous_agent":"clinical_agent"}
+        return {
+            "eval_result": "Unsatisfied",
+            "retry_count": state.get("retry_count", 0) + 1
+        }
 
-def drug_interaction__agent(state:AbilifyState)->dict:
-    response=drug_interaction_agent.invoke(query=state["query"],retrieved_context=state["retrieved_context"])
-    if response.content["found_info"]==False:
-        return {"next":"Unsatisfied","current_ans":response.content["answer"],"previous_agent":"drug_interaction_agent"}
+@observe()
+def route_after_evaluation(state: AbilifyState) -> str:
+    if state.get("eval_result") == "Satisfied":
+         {
+            "eval_result": "Satisfied",
+            "final_answer": state["current_answer"],
+            "retry_count": state.get("retry_count", 0)
+        }
+         return "END"
     else:
-        return {"next":"Satisfied","current_ans":response.content["answer"],"previous_agent":"drug_interaction_agent"}
+        result = {
+            "eval_result": "Unsatisfied",
+            "retry_count": state.get("retry_count", 0)+1
+        }
+        if state["retry_count"] >= 2:
+            result["final_answer"] = state.get("current_answer", 
+                "I could not find sufficient information. Please consult your doctor.")
+            return "END"
+    
+        else:   
+            return state["previous_agent"]
 
-graph=StateGraph(AbilifyState)
-graph.add_node("question_checking",question_checking)
-graph.add_node("agent_decision",agent_decision)
-graph.add_node("clinical_agent",clinical_agent)
-graph.add_node("drug_interaction_agent",drug_interaction_agent)
-graph.add_node("safety_agent",safety_agent)
-graph.add_node("evaluation_agent",evaluation_agent)
+def supervisor_agent(state: AbilifyState) -> dict:
+    return "Donot have enough information for this query. Please consult a medical professional or your doctor for more information."
+
+# Build graph
+graph = StateGraph(AbilifyState)
+
+graph.add_node("question_checking", question_checking)
+graph.add_node("agent_decision", agent_decision)
+graph.add_node("clinical_agent", clinical__agent)
+graph.add_node("drug_interaction_agent", drug_interaction__agent)
+graph.add_node("safety_agent", safety__agent)
+graph.add_node("evaluation_agent", evaluation__agent)
+graph.add_node("supervisor_agent", supervisor_agent)
 
 graph.set_entry_point("question_checking")
 
-graph.add_conditional_edges("question_checking",lambda state:state["next"],{"valid":"agent_decision","invalid":END})
-graph.add_conditional_edges("agent_decision", lambda state:state["next"],{"clinical_agent":"clinical_agent","drug_interaction_agent":"drug_interaction_agent","safety_agent":"safety_agent"})
-graph.add_conditional_edges("clinical_agent",lambda state:state["next"],{"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"})
-graph.add_conditional_edges("drug_interaction_agent",lambda state:state["next"],{"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"})
-graph.add_conditional_edges("safety_agent",lambda state:state["next"],{"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"})
-graph.add_edges("supervisor_agent",END)  
+graph.add_conditional_edges(
+    "question_checking",
+    lambda state: state["next"],
+    {"valid": "agent_decision", "invalid": END}
+)
 
-def route_after_evaluation(state: AbilifyState) -> str:
-    if state["eval_result"] == "Satisfied":
-        return "END"
-    return state["previous_agent"] 
+graph.add_conditional_edges(
+    "agent_decision",
+    lambda state: state["next"],
+    {
+        "clinical_agent": "clinical_agent",
+        "drug_interaction_agent": "drug_interaction_agent",
+        "safety_agent": "safety_agent"
+    }
+)
+
+graph.add_conditional_edges(
+    "clinical_agent",
+    lambda state: state["next"],
+    {"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"}
+)
+
+graph.add_conditional_edges(
+    "drug_interaction_agent",
+    lambda state: state["next"],
+    {"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"}
+)
+
+graph.add_conditional_edges(
+    "safety_agent",
+    lambda state: state["next"],
+    {"Satisfied": "evaluation_agent", "Unsatisfied": "supervisor_agent"}
+)
+
+graph.add_edge("supervisor_agent", END)
 
 graph.add_conditional_edges(
     "evaluation_agent",
-    route_after_evaluation,  
+    route_after_evaluation,
     {
         "END": END,
         "clinical_agent": "clinical_agent",
@@ -102,3 +280,5 @@ graph.add_conditional_edges(
     }
 )
 
+memory = MemorySaver()
+app = graph.compile(checkpointer=memory)

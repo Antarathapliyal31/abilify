@@ -9,6 +9,7 @@ Returns two things:
   write — channel to SEND data to server"""
 import os
 from dotenv import load_dotenv
+from langfuse import observe
 load_dotenv()
 
 async def _pubmed_mcp_client_search_async(query:str)->str:
@@ -28,13 +29,14 @@ async def _pubmed_mcp_client_fulltext_async(query:str)->str:
             if result.content:
                 return result.content[0].text
             return "No relevant PubMed articles found."
-        
+
+@observe()    
 def pubmed_mcp_client_search(query:str)->str:
     try:
         return asyncio.run(_pubmed_mcp_client_search_async(query))
     except Exception as e:
         return f"Error in MCP client: {e}"
-
+@observe()
 def pubmed_mcp_client_fulltext(query:str)->str:
     try:
         return asyncio.run(_pubmed_mcp_client_fulltext_async(query))
