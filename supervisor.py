@@ -14,12 +14,22 @@ import os
 @observe()
 def question_checking(state: AbilifyState) -> dict:
     query = state["query"]
-    prompt = f"""You are a helpful agent that checks if the {query} is a valid question related to abilify that can be answered.
+    prompt = f"""You are a abilify agent that checks if the {query} is a question related to abilify.
     If the question is valid, return "valid", if its not valid return "invalid".
+    Example:
+    query: what is teh weather in nJ today?
+    output:{{"next": "invalid"}}
+    query: what are the side effects of abilify in children?
+    output:{{"next": "valid"}}
+    This is a mandatory step.
+    Be strict in checking if the query is valid or not.
     Output will be a dictionary, example: {{"next":"valid"}} or {{"next":"invalid"}}
     query:{query}"""
     response = llm.invoke(prompt)
-    if "valid" in response.content.lower():
+    response_text = response.content.lower()
+    if "invalid" in response_text:
+        return {"next": "invalid"}
+    elif "valid" in response_text:
         return {"next": "valid"}
     else:
         return {"next": "invalid"}
@@ -64,7 +74,8 @@ def clinical__agent(state: AbilifyState) -> dict:
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    
+    state["retrieved_context"] = retrieved_context
+
     response = clinical_agent.invoke({
         "query": query,
         "retrieved_context": retrieved_context
@@ -108,7 +119,7 @@ def drug_interaction__agent(state: AbilifyState) -> dict:
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    state["retrieved_context"] = "\n\n".join([chunk for chunk in retrieved_context])
+    state["retrieved_context"] = retrieved_context
     response = drug_interaction_agent.invoke({
         "query": state["query"],
         "retrieved_context": state["retrieved_context"]
@@ -142,7 +153,7 @@ def safety__agent(state: AbilifyState) -> dict:
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    state["retrieved_context"] = "\n\n".join([chunk for chunk in retrieved_context])
+    state["retrieved_context"] = retrieved_context
     response = safety_agent.invoke({
         "query": state["query"],
         "retrieved_context": state["retrieved_context"]
@@ -175,13 +186,11 @@ def safety__agent(state: AbilifyState) -> dict:
 def evaluation__agent(state: AbilifyState) -> dict:
     print(f"CURRENT ANSWER: {state['current_answer'][:200]}")
     query = state["query"]
-    results = hybrid_search_rerank(query)
-    retrieved_context = attach_parent_context(results)
-    
+
     response = evaluation_agent.invoke({
         "question": query,
         "answer": state["current_answer"],
-        "context": retrieved_context
+        "context": state.get("retrieved_context", "")
     })
     output = response["output"]
     
@@ -209,26 +218,28 @@ def route_after_evaluation(state: AbilifyState) -> str:
         return "END"
     return state["previous_agent"]
 
-def supervisor_agent(state: AbilifyState) -> dict:
-    return "Donot have enough information for this query. Please consult a medical professional or your doctor for more information."
+def supervisor_agent(state: AbilifyState) -> str:
+    state["final_answer"]= "Donot have enough information for this query. Please consult a medical professional or your doctor for more information."
+    return "END"
 
 # Build graph
 graph = StateGraph(AbilifyState)
 
 graph.add_node("question_checking", question_checking)
 graph.add_node("agent_decision", agent_decision)
+graph.add_node("supervisor_agent", supervisor_agent)
 graph.add_node("clinical_agent", clinical__agent)
 graph.add_node("drug_interaction_agent", drug_interaction__agent)
 graph.add_node("safety_agent", safety__agent)
 graph.add_node("evaluation_agent", evaluation__agent)
-graph.add_node("supervisor_agent", supervisor_agent)
+
 
 graph.set_entry_point("question_checking")
 
 graph.add_conditional_edges(
     "question_checking",
     lambda state: state["next"],
-    {"valid": "agent_decision", "invalid": END}
+    {"valid": "agent_decision", "invalid": "supervisor_agent"}
 )
 
 graph.add_conditional_edges(

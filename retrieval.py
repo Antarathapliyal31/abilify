@@ -56,7 +56,7 @@ def parenttext_splitting(document):
 
 @observe()
 def metadata(child_chunks, parent_id):
-    prompt = f"""You are a metadata extractor. Extract metadata from the chunk.
+    prompt = f"""You are a metadata extractor for Abilify FDA label chunks.
 
 Chunk: {child_chunks.page_content}
 Parent ID: {parent_id}
@@ -70,9 +70,40 @@ Return ONLY a flat JSON dictionary where:
 
 Required fields:
 - parent_id: {parent_id}
-- content_type: one of "side_effects", "dosage", "drug_interaction", "warnings", "clinical_trials", "general"
+- content_type: classified using STRICT definitions below
 - drug: "aripiprazole" if mentioned, else "unknown"
 - population: "adult", "pediatric", "elderly", or "general"
+
+STRICT content_type definitions:
+- "side_effects": chunk mentions adverse reactions, side effects,
+  tolerability, discontinuation due to reactions
+
+- "dosage": chunk mentions dose, mg, administration,
+  titration, frequency, dosing schedule
+
+- "drug_interaction": chunk mentions combining drugs, CYP3A4, CYP2D6,
+  inhibitors, inducers, co-administration, drug-drug interactions.
+  IMPORTANT: If chunk mentions CYP enzymes or combining Abilify with
+  other drugs always classify as drug_interaction even if clinical
+  trial data is also mentioned
+
+- "warnings": chunk mentions black box warning, contraindications,
+  precautions, mortality risk, suicidal thinking, overdose,
+  NMS neuroleptic malignant syndrome, tardive dyskinesia,
+  seizures, special population risks, serious adverse events.
+  IMPORTANT: If chunk mentions overdose or serious safety risks
+  always classify as warnings
+
+- "clinical_trials": chunk mentions study design, placebo, randomized,
+  efficacy endpoints WITHOUT drug interactions or safety warnings
+
+- "general": anything that does not fit above categories
+
+STRICT population definitions:
+- "pediatric": chunk mentions children, pediatric, ages 6-18, adolescent
+- "elderly": chunk mentions elderly, geriatric, older patients, dementia
+- "adult": chunk mentions adults, adult patients
+- "general": population not specified or mixed populations
 
 Example output:
 {{"parent_id": "{parent_id}", "content_type": "side_effects", "drug": "aripiprazole", "population": "adult"}}
@@ -94,7 +125,6 @@ Return only the JSON dictionary, nothing else."""
             "drug": "unknown",
             "population": "general"
         }
-
 @observe()
 def child_chunk_creation(parent_chunks):
     parent_dict = {}
