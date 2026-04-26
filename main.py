@@ -1,5 +1,5 @@
 from retrieval import initialize_retrieval
-from supervisor import app
+from graph import app
 from dotenv import load_dotenv
 from langfuse import observe
 load_dotenv()
