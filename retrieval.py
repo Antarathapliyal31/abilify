@@ -1,4 +1,5 @@
-from langchain_community.document_loaders import DirectoryLoader, PyMuPDFLoader
+#from langchain_community.document_loaders import DirectoryLoader, PyMuPDFLoader
+from langchain_community.document_loaders import S3FileLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -12,6 +13,8 @@ import os
 import json
 from dotenv import load_dotenv
 load_dotenv()
+from langchain_community.vectorstores.utils import filter_complex_metadata
+
 
 from langchain_core.documents import Document
 import pickle
@@ -40,10 +43,22 @@ def load_from_disk(path="parent_chunk.json"):
     with open(path, "r") as f:
         return json.load(f)
 
+# @observe()
+# def document_loading():
+#     print("Loading PDF...")
+#     loader = DirectoryLoader("docs/", glob="*.pdf", loader_cls=PyMuPDFLoader)
+#     document = loader.load()
+#     print(f"Loaded {len(document)} pages")
+#     return document
+
 @observe()
 def document_loading():
-    print("Loading PDF...")
-    loader = DirectoryLoader("docs/", glob="*.pdf", loader_cls=PyMuPDFLoader)
+    print("Loading PDF from S3...")
+    loader = S3FileLoader(
+        bucket="abilify-docs",
+        key="RAG_doc_med.pdf",
+        mode="paged"
+    )
     document = loader.load()
     print(f"Loaded {len(document)} pages")
     return document
@@ -149,7 +164,8 @@ def vectorstore_creation(all_child_chunks):
         embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"),
         persist_directory="./chroma_db"
     )
-    vectorstore.add_documents(all_child_chunks)
+    filtered_chunks = filter_complex_metadata(all_child_chunks)
+    vectorstore.add_documents(filtered_chunks)
     return vectorstore
 
 @observe()

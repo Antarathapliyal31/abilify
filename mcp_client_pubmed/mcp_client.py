@@ -22,11 +22,11 @@ async def _pubmed_mcp_client_search_async(query:str)->str:
                 return result.content[0].text
             return "No relevant PubMed articles found."
 
-async def _pubmed_mcp_client_fulltext_async(query:str)->str:
+async def _pubmed_mcp_client_fulltext_async(pmid:str)->str:
     async with streamable_http_client("https://pubmed.caseyjhand.com/mcp") as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result=await session.call_tool("pubmed_search_articles",{"query":query,"max_results":3})
+            result=await session.call_tool("pubmed_fetch_fulltext",{"pmid":pmid})
             if result.content:
                 return result.content[0].text
             return "No relevant PubMed articles found."
