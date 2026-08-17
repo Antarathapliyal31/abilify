@@ -11,9 +11,11 @@ This system uses a multi-agent architecture to answer clinical questions about A
 ```
 User Query
     ↓
-Question Checking — validates Abilify relevance
+PII Redaction — strips PII/PHI locally before any LLM sees the query
     ↓
-Agent Decision — routes to specialist
+Question Checking — validates Abilify relevance (query wrapped in XML tags)
+    ↓
+Agent Decision — routes to specialist (query wrapped in XML tags)
     ↓
 Clinical Agent / Drug Interaction Agent / Safety Agent
     ↓
@@ -71,18 +73,20 @@ Vector Store:     ChromaDB (persistent)
 Keyword Search:   BM25Retriever
 Reranking:        Cohere rerank-english-v3.0
 PDF Loading:      PyMuPDF
+PII Redaction:    Microsoft Presidio (local, no external calls)
 MCP Integration:  Public PubMed MCP server
 Observability:    LangFuse
 ```
 
 ## Guardrails
 
-1. XML tagging — prevents prompt injection
-2. Answer only from context — prevents hallucination
-3. Mandatory medical disclaimer — every response
-4. Source citation required — reduces hallucination
-5. No diagnosis — never recommends starting or stopping medication
-6. Scope restriction — only answers Abilify related questions
+1. PII/PHI redaction — Presidio strips personal/health identifiers locally before any LLM call
+2. XML tagging — user query wrapped in tags and treated as data, preventing prompt injection
+3. Answer only from context — prevents hallucination
+4. Mandatory medical disclaimer — returned as a structured field in every response
+5. Source citation required — reduces hallucination
+6. No diagnosis — never recommends starting or stopping medication
+7. Scope restriction — only answers Abilify related questions
 
 ## Project Structure
 
@@ -106,6 +110,7 @@ abilify/
 ├── state.py
 ├── supervisor.py
 ├── main.py
+├── graph.py
 ├── .gitignore
 ├── requirements.txt
 └── README.md
@@ -115,22 +120,23 @@ abilify/
 
 ### 1. Clone the repository
 
-```bash
+```
 git clone https://github.com/Antarathapliyal31/abilify.git
 cd abilify
 ```
 
 ### 2. Create virtual environment
 
-```bash
+```
 python -m venv venv
 source venv/bin/activate
 ```
 
 ### 3. Install dependencies
 
-```bash
+```
 pip install -r requirements.txt
+python -m spacy download en_core_web_lg
 ```
 
 ### 4. Set up environment variables
@@ -151,7 +157,7 @@ Place the Abilify FDA label PDF in the `docs/` folder named `RAG_doc_med.pdf`.
 
 ### 6. Run
 
-```bash
+```
 python main.py
 ```
 
@@ -160,6 +166,7 @@ On first run the system builds the vector index automatically. This takes 5-10 m
 ## How It Works
 
 ### Ingestion (first run only)
+
 1. Loads Abilify FDA label PDF using PyMuPDF
 2. Splits into parent chunks (1000 tokens) and child chunks (300 tokens)
 3. Extracts structured metadata per chunk using GPT-3.5-turbo
@@ -167,13 +174,19 @@ On first run the system builds the vector index automatically. This takes 5-10 m
 5. Stores embeddings in ChromaDB and parent texts in JSON
 
 ### Query Time
-1. Question checking validates if query is Abilify related
-2. Agent decision routes to appropriate specialist agent
-3. Specialist agent rewrites query and retrieves from FDA label
-4. If FDA context insufficient agent calls PubMed MCP server
-5. Evaluation agent checks faithfulness, completeness, disclaimer, citation
-6. If insufficient system retries up to 2 times
-7. Final answer returned with medical disclaimer
+
+1. PII redaction strips any personal/health identifiers from the query locally, before any LLM sees it
+2. Question checking validates if query is Abilify related (query wrapped in XML tags)
+3. Agent decision routes to appropriate specialist agent (query wrapped in XML tags)
+4. Specialist agent reformulates query and retrieves from FDA label
+5. If FDA context insufficient agent calls PubMed MCP server
+6. Evaluation agent checks faithfulness, completeness, disclaimer, citation
+7. If insufficient system retries up to 2 times
+8. Final answer returned with medical disclaimer
+
+## PII / PHI Redaction
+
+Before any user query reaches an LLM, it passes through a redaction node built on Microsoft Presidio, which runs entirely locally (no external calls). Presidio combines regex recognizers for structured identifiers (SSN, email, phone, credit card) with local spaCy NER for unstructured PII (names, locations). Because detection is local and deterministic — never an LLM call — no personal or health data is transmitted to the model, its prompts, or the observability traces. This is the design a HIPAA-regulated deployment requires; for clinical identifiers such as MRNs, custom Presidio recognizers can be added.
 
 ## MCP Integration
 
@@ -190,6 +203,7 @@ No authentication required for this public server.
 ## Observability
 
 All agent runs are traced in LangFuse:
+
 - Full trace per query
 - Token usage and cost per agent call
 - Evaluation scores per run
@@ -199,6 +213,7 @@ All agent runs are traced in LangFuse:
 ## Agentic RAG Pattern
 
 This system implements agentic RAG where:
+
 - Agent decides which source to retrieve from (PDF vs PubMed)
 - Agent reformulates query for better retrieval
 - Evaluation agent decides if retrieval quality is sufficient
@@ -208,9 +223,10 @@ This system implements agentic RAG where:
 ## Challenges Solved During Development
 
 - LangChain 1.x breaking changes — migrated to langchain_classic for agent support
-- Chroma flat metadata requirement — fixed LLM prompt to return flat JSON only
+- Chroma flat metadata requirement — fixed LLM prompt to return flat JSON only, with filter_complex_metadata as a safety net
 - @observe decorator incompatibility with @tool — removed from tool functions
-- JSON parsing with extra appended text — extracted JSON by bracket matching
+- JSON parsing with extra appended text — extracted JSON by bracket matching (first `{` to last `}`)
+- Medical disclaimer lost before evaluation — the agent originally appended the disclaimer as loose text after the JSON, so the bracket-matching parse stripped it and it never reached the evaluation agent, causing check_medical_disclaimer to fail intermittently. Fixed by prompting the agent to return the disclaimer as a key inside the JSON, carrying it through a dedicated disclaimer state field, and having the evaluation agent read it from state
 - State field name mismatches — standardized all field names to match state.py
 - BM25 persistence across restarts — saved child chunks to pickle file
 - asyncio context propagation with LangFuse — applied @observe only to sync wrappers
