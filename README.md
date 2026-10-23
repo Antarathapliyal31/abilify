@@ -105,8 +105,7 @@ abilify/
 │   ├── __init__.py
 │   └── mcp_client.py
 ├── docs/
-│   ├── RAG_doc_med.pdf
-│   └── DEMO.md
+│   └── RAG_doc_med.pdf
 ├── tests/
 │   ├── eval_questions.json
 │   ├── run_eval.py
@@ -219,10 +218,6 @@ streamlit run app.py
 ```
 
 The UI shows the raw question, the Presidio-redacted version actually fed to the LLM, the routed agent, and the final answer. Session-scoped `thread_id` means the LangGraph checkpointer sees multi-turn history.
-
-![demo](docs/demo.gif)
-
-To re-record the GIF see [`docs/DEMO.md`](docs/DEMO.md).
 
 ## Evaluation
 
