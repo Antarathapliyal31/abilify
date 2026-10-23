@@ -1,38 +1,96 @@
-from langgraph.graph import StateGraph, END
+import json
+import logging
+import os
+import re
+
+from langgraph.graph import END, StateGraph
 from langfuse import observe
 from langgraph.checkpoint.memory import MemorySaver
+
 from state import AbilifyState
 from agents.clinical_agent import executor as clinical_agent
 from agents.drug_interaction_agent import executor as drug_interaction_agent
 from agents.safety_agent import executor as safety_agent
-from agents.evaluation_agent import executor as evaluation_agent
+from agents.evaluation_agent import evaluate
 from llm.llm import llm
-import json
-from retrieval import hybrid_search_rerank, attach_parent_context
-import os
+from retrieval import attach_parent_context, hybrid_search_rerank
+from redaction import redact
+
+logger = logging.getLogger(__name__)
+
+
+def _as_text(output) -> str:
+    """Normalize AgentExecutor output across providers.
+
+    - OpenAI function-calling returns a plain str
+    - Anthropic/Bedrock tool_use returns a list of content blocks like
+      [{"type": "text", "text": "..."}, ...]
+    """
+    if isinstance(output, str):
+        return output
+    if isinstance(output, list):
+        parts = []
+        for block in output:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    return str(output)
+
+
+_PLACEHOLDER_RE = re.compile(r"<[A-Z_]+>")
+
+
+def _strip_placeholders(text: str) -> str:
+    """Drop `<PERSON>`-style redaction tokens so the scope-checker LLM sees
+    only the semantic question. Specialists still get the full redacted
+    text (placeholders preserve structure for retrieval queries)."""
+    cleaned = _PLACEHOLDER_RE.sub("", text)
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
+@observe()
+def redact_pii(state: AbilifyState) -> dict:
+    """Redact PII from the user query before any LLM sees it.
+
+    Keeps the raw input in `original_query` for display/audit; downstream
+    nodes (scope checking, routing, specialists) see only the redacted text.
+    """
+    raw = state["query"]
+    cleaned = redact(raw)
+    return {"original_query": raw, "query": cleaned}
 
 @observe()
 def question_checking(state: AbilifyState) -> dict:
-    query = state["query"]
-    prompt = f"""You are a abilify agent that checks if the {query} is a question related to abilify.
-    If the question is valid, return "valid", if its not valid return "invalid".
-    Example:
-    query: what is teh weather in nJ today?
-    output:{{"next": "invalid"}}
-    query: what are the side effects of abilify in children?
-    output:{{"next": "valid"}}
-    This is a mandatory step.
-    Be strict in checking if the query is valid or not.
-    Output will be a dictionary, example: {{"next":"valid"}} or {{"next":"invalid"}}
-    query:{query}"""
+    cleaned = _strip_placeholders(state["query"])
+    prompt = f"""You are a scope classifier for an Abilify (aripiprazole) clinical Q&A system.
+
+Decide whether the user is asking a question about Abilify or aripiprazole —
+its uses, side effects, dosing, drug interactions, warnings, pregnancy,
+pediatric use, overdose, or related clinical topics. Personal details
+(names, dates, patient info) are not relevant to this decision; focus on
+the medical question itself.
+
+Examples:
+- "What are the side effects of Abilify?" -> valid
+- "Can Abilify be taken with Prozac?" -> valid
+- "Is Abilify safe during pregnancy?" -> valid
+- "DOB 1985, is Abilify safe?" -> valid
+- "What is the weather in NJ?" -> invalid
+- "Write me a Python function to sort a list." -> invalid
+
+Return exactly one word: valid or invalid.
+
+<query>{cleaned}</query>"""
     response = llm.invoke(prompt)
-    response_text = response.content.lower()
-    if "invalid" in response_text:
+    text = response.content.strip().lower() if isinstance(response.content, str) else str(response.content).lower()
+    if "invalid" in text:
         return {"next": "invalid"}
-    elif "valid" in response_text:
+    if "valid" in text:
         return {"next": "valid"}
-    else:
-        return {"next": "invalid"}
+    logger.warning("question_checking returned unparseable: %r; defaulting to invalid", text[:80])
+    return {"next": "invalid"}
 
 @observe()
 def agent_decision(state: AbilifyState) -> dict:
@@ -74,44 +132,39 @@ def clinical__agent(state: AbilifyState) -> dict:
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    state["retrieved_context"] = retrieved_context
 
     response = clinical_agent.invoke({
         "query": query,
         "retrieved_context": retrieved_context
     })
-    output = response["output"]
-    print(f"DEBUG output: {output[:100]}")  # add this
-    print(f"DEBUG type: {type(output)}")    # add this
-    
+    output = _as_text(response["output"])
+
     try:
-        clean_output = output.split("Consult a qualified")[0].strip()
         start = output.find("{")
         end = output.rfind("}") + 1
         json_str = output[start:end]
-        print(f"DEBUG json_str: {json_str[:100]}")  # add this
         result = json.loads(json_str)
-        print(f"DEBUG result: {result}")            # add this
-        
+
         if result.get("found_info") == False:
             return {
                 "next": "Unsatisfied",
                 "current_answer": result["answer"],
-                "previous_agent": "clinical_agent"
+                "previous_agent": "clinical_agent",
+                "retrieved_context": retrieved_context,
             }
-        print(f"DEBUG returning: {result.get('found_info')}")
-
         return {
             "next": "Satisfied",
             "current_answer": result["answer"],
-            "previous_agent": "clinical_agent"
+            "previous_agent": "clinical_agent",
+            "retrieved_context": retrieved_context,
         }
-    except Exception as e:
-        print(f"DEBUG exception: {e}")              # add this
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.warning("clinical_agent output not parseable (%s); using raw text", type(e).__name__)
         return {
             "next": "Satisfied",
             "current_answer": output,
-            "previous_agent": "clinical_agent"
+            "previous_agent": "clinical_agent",
+            "retrieved_context": retrieved_context,
         }
 
 @observe()
@@ -119,12 +172,11 @@ def drug_interaction__agent(state: AbilifyState) -> dict:
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    state["retrieved_context"] = retrieved_context
     response = drug_interaction_agent.invoke({
-        "query": state["query"],
-        "retrieved_context": state["retrieved_context"]
+        "query": query,
+        "retrieved_context": retrieved_context,
     })
-    output = response["output"]
+    output = _as_text(response["output"])
     try:
         start = output.find("{")
         end = output.rfind("}") + 1
@@ -134,18 +186,22 @@ def drug_interaction__agent(state: AbilifyState) -> dict:
             return {
                 "next": "Unsatisfied",
                 "current_answer": result["answer"],
-                "previous_agent": "drug_interaction_agent"
+                "previous_agent": "drug_interaction_agent",
+                "retrieved_context": retrieved_context,
             }
         return {
             "next": "Satisfied",
             "current_answer": result["answer"],
-            "previous_agent": "drug_interaction_agent"
+            "previous_agent": "drug_interaction_agent",
+            "retrieved_context": retrieved_context,
         }
-    except:
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.warning("drug_interaction_agent output not parseable (%s); using raw text", type(e).__name__)
         return {
             "next": "Satisfied",
             "current_answer": output,
-            "previous_agent": "drug_interaction_agent"
+            "previous_agent": "drug_interaction_agent",
+            "retrieved_context": retrieved_context,
         }
 
 @observe()
@@ -153,12 +209,11 @@ def safety__agent(state: AbilifyState) -> dict:
     query = state["query"]
     results = hybrid_search_rerank(query)
     retrieved_context = attach_parent_context(results)
-    state["retrieved_context"] = retrieved_context
     response = safety_agent.invoke({
-        "query": state["query"],
-        "retrieved_context": state["retrieved_context"]
+        "query": query,
+        "retrieved_context": retrieved_context,
     })
-    output = response["output"]
+    output = _as_text(response["output"])
     try:
         start = output.find("{")
         end = output.rfind("}") + 1
@@ -168,48 +223,45 @@ def safety__agent(state: AbilifyState) -> dict:
             return {
                 "next": "Unsatisfied",
                 "current_answer": result["answer"],
-                "previous_agent": "safety_agent"
+                "previous_agent": "safety_agent",
+                "retrieved_context": retrieved_context,
             }
         return {
             "next": "Satisfied",
             "current_answer": result["answer"],
-            "previous_agent": "safety_agent"
+            "previous_agent": "safety_agent",
+            "retrieved_context": retrieved_context,
         }
-    except:
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.warning("safety_agent output not parseable (%s); using raw text", type(e).__name__)
         return {
             "next": "Satisfied",
             "current_answer": output,
-            "previous_agent": "safety_agent"
+            "previous_agent": "safety_agent",
+            "retrieved_context": retrieved_context,
         }
 
 @observe()
 def evaluation__agent(state: AbilifyState) -> dict:
-    print(f"CURRENT ANSWER: {state['current_answer'][:200]}")
-    query = state["query"]
-
-    response = evaluation_agent.invoke({
-        "question": query,
-        "answer": state["current_answer"],
-        "context": state.get("retrieved_context", "")
-    })
-    output = response["output"]
-    
-    if "sufficient" in output.lower() and "insufficient" not in output.lower():
+    verdict = evaluate(
+        question=state["query"],
+        answer=state["current_answer"],
+        context=state.get("retrieved_context", ""),
+    )
+    if verdict["verdict"] == "SUFFICIENT":
         return {
             "eval_result": "Satisfied",
             "final_answer": state["current_answer"],
-            "retry_count": state.get("retry_count", 0)
+            "retry_count": state.get("retry_count", 0),
         }
-    else:
-        retry_count = state.get("retry_count", 0) + 1
-        result = {
-            "eval_result": "Unsatisfied",
-            "retry_count": retry_count
-        }
-        if retry_count >= 2:
-            result["final_answer"] = state.get("current_answer",
-                "I could not find sufficient information. Please consult your doctor.")
-        return result
+    retry_count = state.get("retry_count", 0) + 1
+    result = {"eval_result": "Unsatisfied", "retry_count": retry_count}
+    if retry_count >= 2:
+        result["final_answer"] = state.get(
+            "current_answer",
+            "I could not find sufficient information. Please consult your doctor.",
+        )
+    return result
 @observe()
 def route_after_evaluation(state: AbilifyState) -> str:
     if state.get("eval_result") == "Satisfied":
@@ -218,13 +270,15 @@ def route_after_evaluation(state: AbilifyState) -> str:
         return "END"
     return state["previous_agent"]
 
-def supervisor_agent(state: AbilifyState) -> str:
-    state["final_answer"]= "Donot have enough information for this query. Please consult a medical professional or your doctor for more information."
-    return "END"
+def supervisor_agent(state: AbilifyState) -> dict:
+    return {
+        "final_answer": "I don't have enough information for this query. Please consult a medical professional or your doctor for more information."
+    }
 
 # Build graph
 graph = StateGraph(AbilifyState)
 
+graph.add_node("redact_pii", redact_pii)
 graph.add_node("question_checking", question_checking)
 graph.add_node("agent_decision", agent_decision)
 graph.add_node("supervisor_agent", supervisor_agent)
@@ -234,7 +288,9 @@ graph.add_node("safety_agent", safety__agent)
 graph.add_node("evaluation_agent", evaluation__agent)
 
 
-graph.set_entry_point("question_checking")
+graph.set_entry_point("redact_pii")
+
+graph.add_edge("redact_pii", "question_checking")
 
 graph.add_conditional_edges(
     "question_checking",

@@ -1,60 +1,62 @@
-from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
 import asyncio
-import traceback
-"""streamable_http_client:
-Handles the HTTP connection layer
-Connects to the server URL
-Returns two things:
-  read  — channel to RECEIVE data from server
-  write — channel to SEND data to server"""
+import logging
 import os
+
 from dotenv import load_dotenv
 from langfuse import observe
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
 load_dotenv()
+logger = logging.getLogger(__name__)
 
-async def _pubmed_mcp_client_search_async(query:str)->str:
-    async with streamable_http_client("https://pubmed.caseyjhand.com/mcp") as (read, write, _):
+PUBMED_MCP_URL = os.getenv("PUBMED_MCP_URL", "https://pubmed.caseyjhand.com/mcp")
+
+async def _pubmed_mcp_client_search_async(query: str) -> str:
+    async with streamable_http_client(PUBMED_MCP_URL) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result=await session.call_tool("pubmed_search_articles",{"query":query,"max_results":3})
+            result = await session.call_tool(
+                "pubmed_search_articles", {"query": query, "max_results": 3}
+            )
             if result.content:
                 return result.content[0].text
             return "No relevant PubMed articles found."
 
-async def _pubmed_mcp_client_fulltext_async(pmid:str)->str:
-    async with streamable_http_client("https://pubmed.caseyjhand.com/mcp") as (read, write, _):
+
+async def _pubmed_mcp_client_fulltext_async(pmid: str) -> str:
+    async with streamable_http_client(PUBMED_MCP_URL) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
-            result=await session.call_tool("pubmed_fetch_fulltext",{"pmid":pmid})
+            result = await session.call_tool("pubmed_fetch_fulltext", {"pmid": pmid})
             if result.content:
                 return result.content[0].text
             return "No relevant PubMed articles found."
+
 
 def _format_mcp_error(e: BaseException) -> str:
     parts = [f"{type(e).__name__}: {e}"]
-    inner = getattr(e, "exceptions", None)
-    if inner:
-        for sub in inner:
-            parts.append(f"  -> {type(sub).__name__}: {sub}")
-    print("MCP client traceback:")
-    traceback.print_exc()
+    for sub in getattr(e, "exceptions", None) or ():
+        parts.append(f"  -> {type(sub).__name__}: {sub}")
+    logger.exception("PubMed MCP call failed")
     return "Error in MCP client: " + " | ".join(parts)
 
-@observe()
-def pubmed_mcp_client_search(query:str)->str:
-    try:
-        return asyncio.run(_pubmed_mcp_client_search_async(query))
-    except BaseException as e:
-        return _format_mcp_error(e)
 
 @observe()
-def pubmed_mcp_client_fulltext(query:str)->str:
+def pubmed_mcp_client_search(query: str) -> str:
     try:
-        return asyncio.run(_pubmed_mcp_client_fulltext_async(query))
+        return asyncio.run(_pubmed_mcp_client_search_async(query))
+    except (ConnectionError, TimeoutError, RuntimeError, OSError) as e:
+        return _format_mcp_error(e)
+
+
+@observe()
+def pubmed_mcp_client_fulltext(pmid: str) -> str:
+    try:
+        return asyncio.run(_pubmed_mcp_client_fulltext_async(pmid))
     except RuntimeError:
-        # If event loop already running use this instead
+        # Called from inside a running event loop (e.g. Streamlit).
         loop = asyncio.get_event_loop()
-        return loop.run_until_complete(_pubmed_mcp_client_fulltext_async(query))
-    except BaseException as e:
+        return loop.run_until_complete(_pubmed_mcp_client_fulltext_async(pmid))
+    except (ConnectionError, TimeoutError, OSError) as e:
         return _format_mcp_error(e)

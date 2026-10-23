@@ -1,6 +1,14 @@
-from langchain_openai import ChatOpenAI
 import os
+
 from dotenv import load_dotenv
+from langchain_aws import ChatBedrock
+
 load_dotenv()
 
-llm=ChatOpenAI(model="gpt-3.5-turbo",api_key=os.getenv("OPENAI_API_KEY"))
+# Configurable via .env — pick a Bedrock model + region without code changes.
+BEDROCK_MODEL_ID = os.getenv(
+    "BEDROCK_MODEL_ID", "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
+BEDROCK_REGION = os.getenv("BEDROCK_REGION", "us-east-1")
+
+llm = ChatBedrock(model_id=BEDROCK_MODEL_ID, region_name=BEDROCK_REGION)

@@ -1,0 +1,205 @@
+[
+  {
+    "id": "clinical-01",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "What is Abilify used to treat in adults?",
+    "expected_keywords": ["schizophrenia", "bipolar", "depression"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "clinical-02",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "What is the mechanism of action of aripiprazole?",
+    "expected_keywords": ["dopamine", "serotonin", "partial agonist"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "clinical-03",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "What is the typical starting dose of Abilify for an adult with schizophrenia?",
+    "expected_keywords": ["10", "15", "mg"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "clinical-04",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "How is Abilify administered — oral tablet, injection, or both?",
+    "expected_keywords": ["tablet", "oral", "injection"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "clinical-05",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "What are the common side effects of Abilify in adults?",
+    "expected_keywords": ["akathisia", "nausea", "headache", "insomnia"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "clinical-06",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "What are the latest research findings on Abilify's effectiveness for autism in children published after 2016?",
+    "expected_keywords": ["autism", "children", "irritability"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "clinical-07",
+    "category": "clinical",
+    "expected_agent": "clinical_agent",
+    "question": "Is Abilify approved as adjunctive treatment for major depressive disorder?",
+    "expected_keywords": ["adjunctive", "depression", "MDD"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "interaction-01",
+    "category": "drug_interaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "Can I take Abilify with Prozac?",
+    "expected_keywords": ["CYP2D6", "fluoxetine", "dose"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "interaction-02",
+    "category": "drug_interaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "How does ketoconazole affect Abilify metabolism?",
+    "expected_keywords": ["CYP3A4", "inhibitor", "reduce"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "interaction-03",
+    "category": "drug_interaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "Does carbamazepine affect Abilify levels?",
+    "expected_keywords": ["CYP3A4", "inducer", "increase dose"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "interaction-04",
+    "category": "drug_interaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "Is it safe to combine Abilify with alcohol?",
+    "expected_keywords": ["avoid", "alcohol", "CNS"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "interaction-05",
+    "category": "drug_interaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "What is the recommended Abilify dose adjustment when taken with a strong CYP2D6 inhibitor?",
+    "expected_keywords": ["half", "reduce", "CYP2D6"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "interaction-06",
+    "category": "drug_interaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "Can Abilify be taken with lithium?",
+    "expected_keywords": ["lithium", "no significant", "adjustment"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-01",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "What is the black box warning for Abilify?",
+    "expected_keywords": ["elderly", "dementia", "mortality", "suicidal"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-02",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "What are the risks of Abilify overdose?",
+    "expected_keywords": ["symptoms", "supportive", "ECG"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-03",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "Is Abilify safe during pregnancy?",
+    "expected_keywords": ["third trimester", "withdrawal", "neonatal"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-04",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "What is neuroleptic malignant syndrome and how does it relate to Abilify?",
+    "expected_keywords": ["NMS", "fever", "rigidity", "discontinue"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-05",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "What are the risks of tardive dyskinesia with long-term Abilify use?",
+    "expected_keywords": ["tardive", "movement", "irreversible"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-06",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "Can elderly patients with dementia-related psychosis take Abilify?",
+    "expected_keywords": ["not approved", "elderly", "increased mortality"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "safety-07",
+    "category": "safety",
+    "expected_agent": "safety_agent",
+    "question": "What are the pediatric safety concerns for Abilify in children with autism?",
+    "expected_keywords": ["weight", "somnolence", "6 years"],
+    "must_include_disclaimer": true
+  },
+  {
+    "id": "pii-01",
+    "category": "pii_redaction",
+    "expected_agent": "clinical_agent",
+    "question": "My name is John Smith (DOB 1985-03-12), email john.smith@example.com, phone 415-555-0199 — what are the common side effects of Abilify?",
+    "expected_keywords": ["akathisia", "nausea", "headache"],
+    "must_include_disclaimer": true,
+    "redaction_must_remove": ["John Smith", "john.smith@example.com", "415-555-0199"]
+  },
+  {
+    "id": "pii-02",
+    "category": "pii_redaction",
+    "expected_agent": "drug_interaction_agent",
+    "question": "Patient Jane Doe, SSN 456-78-1234, is asking: can Abilify be combined with Zoloft?",
+    "expected_keywords": ["CYP2D6", "sertraline"],
+    "must_include_disclaimer": true,
+    "redaction_must_remove": ["Jane Doe", "456-78-1234"],
+    "redaction_must_keep": ["Abilify", "Zoloft"]
+  },
+  {
+    "id": "scope-01",
+    "category": "out_of_scope",
+    "expected_agent": "supervisor_agent",
+    "question": "What is the weather in New Jersey today?",
+    "expected_keywords": ["medical professional", "consult"],
+    "must_include_disclaimer": false
+  },
+  {
+    "id": "scope-02",
+    "category": "out_of_scope",
+    "expected_agent": "supervisor_agent",
+    "question": "Can you write me a Python function to sort a list?",
+    "expected_keywords": ["medical professional", "consult"],
+    "must_include_disclaimer": false
+  },
+  {
+    "id": "scope-03",
+    "category": "out_of_scope",
+    "expected_agent": "supervisor_agent",
+    "question": "What is the capital of France?",
+    "expected_keywords": ["medical professional", "consult"],
+    "must_include_disclaimer": false
+  }
+]

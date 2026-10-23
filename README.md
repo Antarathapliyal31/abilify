@@ -11,7 +11,7 @@ This system uses a multi-agent architecture to answer clinical questions about A
 ```
 User Query
     ↓
-PII Redaction — strips PII/PHI locally before any LLM sees the query
+PII Redaction — Presidio strips PII/PHI locally before any LLM sees the query
     ↓
 Question Checking — validates Abilify relevance (query wrapped in XML tags)
     ↓
@@ -67,13 +67,14 @@ LLM Generation with Guardrails
 ```
 Orchestration:    LangGraph
 Agents:           LangChain AgentExecutor (langchain_classic)
-LLM:              OpenAI GPT-3.5-turbo
+LLM:              Anthropic Claude Haiku 4.5 via AWS Bedrock
+Metadata LLM:     OpenAI GPT-3.5-turbo (ingestion-time only, flat-JSON tuned)
 Embeddings:       OpenAI text-embedding-3-small
 Vector Store:     ChromaDB (persistent)
 Keyword Search:   BM25Retriever
 Reranking:        Cohere rerank-english-v3.0
-PDF Loading:      PyMuPDF
-PII Redaction:    Microsoft Presidio (local, no external calls)
+PDF Loading:      LangChain S3FileLoader (bucket: abilify-docs)
+PII Redaction:    Microsoft Presidio + spaCy en_core_web_sm (local, no external calls)
 MCP Integration:  Public PubMed MCP server
 Observability:    LangFuse
 ```
@@ -99,20 +100,28 @@ abilify/
 │   ├── safety_agent.py
 │   └── evaluation_agent.py
 ├── llm/
-│   ├── __init__.py
 │   └── llm.py
 ├── mcp_client_pubmed/
 │   ├── __init__.py
 │   └── mcp_client.py
 ├── docs/
-│   └── RAG_doc_med.pdf
-├── retrieval.py
-├── state.py
-├── supervisor.py
-├── main.py
-├── graph.py
-├── .gitignore
+│   ├── RAG_doc_med.pdf
+│   └── DEMO.md
+├── tests/
+│   ├── eval_questions.json
+│   ├── run_eval.py
+│   └── test_redaction.py
+├── .github/workflows/ci.yml
+├── graph.py              # LangGraph state machine (was supervisor.py)
+├── retrieval.py          # ingestion + hybrid search + rerank
+├── redaction.py          # Presidio PII redaction (step 1 of the pipeline)
+├── state.py              # AbilifyState TypedDict
+├── app.py                # Streamlit frontend
+├── main.py               # entry point
 ├── requirements.txt
+├── LICENSE
+├── .gitignore
+├── .env                  # not committed
 └── README.md
 ```
 
@@ -136,7 +145,7 @@ source venv/bin/activate
 
 ```
 pip install -r requirements.txt
-python -m spacy download en_core_web_lg
+python -m spacy download en_core_web_sm   # for Presidio redaction
 ```
 
 ### 4. Set up environment variables
@@ -149,11 +158,12 @@ COHERE_API_KEY=your-cohere-api-key
 LANGFUSE_PUBLIC_KEY=your-langfuse-public-key
 LANGFUSE_SECRET_KEY=your-langfuse-secret-key
 LANGFUSE_HOST=https://cloud.langfuse.com
+# AWS creds via default chain (env or ~/.aws/credentials) for Bedrock + S3
 ```
 
-### 5. Add Abilify FDA label PDF
+### 5. Make the FDA label PDF available
 
-Place the Abilify FDA label PDF in the `docs/` folder named `RAG_doc_med.pdf`.
+The ingestion pipeline reads the PDF from S3: bucket `abilify-docs`, key `RAG_doc_med.pdf`. Ensure your AWS credentials have read access, or swap in a local loader in `retrieval.py:document_loading`.
 
 ### 6. Run
 
@@ -175,18 +185,18 @@ On first run the system builds the vector index automatically. This takes 5-10 m
 
 ### Query Time
 
-1. PII redaction strips any personal/health identifiers from the query locally, before any LLM sees it
-2. Question checking validates if query is Abilify related (query wrapped in XML tags)
-3. Agent decision routes to appropriate specialist agent (query wrapped in XML tags)
-4. Specialist agent reformulates query and retrieves from FDA label
-5. If FDA context insufficient agent calls PubMed MCP server
+1. Presidio redacts PII/PHI from the query locally (names, emails, phone, SSN, labeled DOB) before any LLM sees it; a drug name allow-list keeps terms like "Abilify" and "Prozac" intact
+2. Question checking validates if the redacted query is Abilify related (query wrapped in XML tags, `<ENTITY>` placeholders stripped before classification)
+3. Agent decision routes to the appropriate specialist agent (query wrapped in XML tags)
+4. Specialist agent rewrites the query and retrieves from the FDA label
+5. If FDA context is insufficient the agent calls the PubMed MCP server
 6. Evaluation agent checks faithfulness, completeness, disclaimer, citation
-7. If insufficient system retries up to 2 times
+7. If insufficient the system retries up to 2 times
 8. Final answer returned with medical disclaimer
 
 ## PII / PHI Redaction
 
-Before any user query reaches an LLM, it passes through a redaction node built on Microsoft Presidio, which runs entirely locally (no external calls). Presidio combines regex recognizers for structured identifiers (SSN, email, phone, credit card) with local spaCy NER for unstructured PII (names, locations). Because detection is local and deterministic — never an LLM call — no personal or health data is transmitted to the model, its prompts, or the observability traces. This is the design a HIPAA-regulated deployment requires; for clinical identifiers such as MRNs, custom Presidio recognizers can be added.
+Before any user query reaches an LLM, it passes through a redaction node built on Microsoft Presidio, which runs entirely locally with the `en_core_web_sm` spaCy model (no external calls). Presidio combines regex recognizers for structured identifiers (SSN, email, phone, credit card) with local spaCy NER for unstructured PII (names, locations), plus a custom `DATE_OF_BIRTH` recognizer that catches labeled dates (`DOB 1985-03-12`, `born on March 12, 1985`) without touching bare years used in research queries ("after 2016"). A psychiatric-drug allow-list (Abilify, Prozac, Zoloft, Lexapro, lithium, …) prevents the small spaCy model from falsely tagging drug names as `PERSON`. Because detection is local and deterministic — never an LLM call — no personal or health data is transmitted to the model, its prompts, or the observability traces. This is the design a HIPAA-regulated deployment requires; for clinical identifiers such as MRNs, custom Presidio recognizers can be added.
 
 ## MCP Integration
 
@@ -199,6 +209,51 @@ Usage: Fallback when FDA label context is insufficient
 ```
 
 No authentication required for this public server.
+
+## Frontend
+
+A Streamlit UI is included at `app.py`:
+
+```bash
+streamlit run app.py
+```
+
+The UI shows the raw question, the Presidio-redacted version actually fed to the LLM, the routed agent, and the final answer. Session-scoped `thread_id` means the LangGraph checkpointer sees multi-turn history.
+
+![demo](docs/demo.gif)
+
+To re-record the GIF see [`docs/DEMO.md`](docs/DEMO.md).
+
+## Evaluation
+
+An offline eval runs the full pipeline against 25 curated questions spanning the four agent paths plus PII and out-of-scope cases. Scoring is deterministic: routing match, keyword recall, disclaimer presence, and (for PII rows) redaction verification.
+
+```bash
+python tests/run_eval.py              # all 25 (writes tests/eval_results.json)
+python tests/run_eval.py --limit 5    # first 5 only
+python tests/run_eval.py --id pii-01  # a single row
+```
+
+Latest run (2026-10-22, Bedrock Claude Haiku 4.5):
+
+| Category         | n | Routing | Disclaimer | Redaction | Avg keyword recall |
+|------------------|---|---------|------------|-----------|--------------------|
+| clinical         | 7 | 100%    | 100%       | 100%      | 0.92               |
+| drug_interaction | 6 | 100%    | 83%        | 100%      | 0.50               |
+| safety           | 7 | 100%    | 100%       | 100%      | 0.65               |
+| pii_redaction    | 2 | 100%    | 100%       | 100%      | 0.75               |
+| out_of_scope     | 3 | 100%    | 100%       | 100%      | 1.00               |
+| **Overall**      | **25** | **100%** | **96%** | **100%** | **0.74**           |
+
+`pii-01` was re-tested in isolation after fixing scope-checker placeholder handling (see "Known gaps" below). The other 24 results are from the single full run.
+
+Known gaps:
+- `interaction-02`: agent hit `max_iterations=3` before producing a parseable JSON block. Raising the iteration cap or tightening the prompt would recover this.
+- Low keyword recall on some drug-interaction/safety rows reflects test strictness (answers are correct but don't repeat every expected keyword), not wrong answers.
+
+Scope-checker PII robustness (fixed): earlier runs misclassified `pii-01` (a side-effects question prefixed with name/email/phone/DOB) as out-of-scope because the redacted placeholders confused the scope LLM. `question_checking` now strips `<ENTITY>` placeholders before classification; the specialist still sees the full redacted query. The DOB custom recognizer also wipes `DOB 1985-03-12`-style constructs without touching bare years like "after 2016".
+
+CI runs the redaction unit tests only (`tests/test_redaction.py`); the end-to-end eval needs Bedrock/OpenAI/Cohere/S3 credentials and runs locally.
 
 ## Observability
 

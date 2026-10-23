@@ -1,4 +1,4 @@
-from langchain_classic.agents import create_openai_tools_agent,AgentExecutor
+from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate,MessagesPlaceholder,HumanMessagePromptTemplate,SystemMessagePromptTemplate
 import os
 from langfuse import observe
@@ -71,5 +71,5 @@ def pubmed_fulltext(pmid:str)->str:
     return pubmed_mcp_client_fulltext(pmid)
 
 tools=[pubmed_search,pubmed_fulltext]
-agent=create_openai_tools_agent(llm,tools,prompt)
+agent=create_tool_calling_agent(llm,tools,prompt)
 executor=AgentExecutor(agent=agent,tools=tools,max_iterations=3,handle_parsing_errors=True,verbose=True)

@@ -1,0 +1,33 @@
+{
+  "summary": {
+    "total": 1,
+    "routing_accuracy_pct": 100.0,
+    "disclaimer_pass_pct": 100.0,
+    "redaction_pass_pct": 100.0,
+    "avg_keyword_recall": 1.0,
+    "by_category": {
+      "pii_redaction": {
+        "n": 1,
+        "routing_pct": 100.0,
+        "disclaimer_pct": 100.0,
+        "redaction_pct": 100.0,
+        "avg_keyword_recall": 1.0
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "pii-01",
+      "category": "pii_redaction",
+      "elapsed_s": 8.74,
+      "expected_agent": "clinical_agent",
+      "actual_previous_agent": "clinical_agent",
+      "routing_correct": true,
+      "keyword_recall": 1.0,
+      "disclaimer_ok": true,
+      "redaction_ok": true,
+      "answer_preview": "The common side effects of Abilify differ slightly between adult and pediatric populations. In adults, the most common side effects include: nausea, vomiting, constipation, headache, dizziness, anxiet",
+      "redacted_query": "My name is <PERSON> (<DATE_OF_BIRTH>), email <EMAIL_ADDRESS>, phone <PHONE_NUMBER> \u2014 what are the common side effects of Abilify?"
+    }
+  ]
+}

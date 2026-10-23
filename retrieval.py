@@ -1,29 +1,31 @@
-#from langchain_community.document_loaders import DirectoryLoader, PyMuPDFLoader
-from langchain_community.document_loaders import S3FileLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_classic.retrievers import EnsembleRetriever
-from langchain_classic.retrievers import ContextualCompressionRetriever
-from langchain_cohere import CohereRerank
-from langchain_community.retrievers import BM25Retriever
-import uuid
-from langfuse import observe
-import os
 import json
-from dotenv import load_dotenv
-load_dotenv()
-from langchain_community.vectorstores.utils import filter_complex_metadata
-
-
-from langchain_core.documents import Document
+import logging
+import os
 import pickle
+import uuid
 
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+from langchain_classic.retrievers import ContextualCompressionRetriever, EnsembleRetriever
+from langchain_cohere import CohereRerank
+from langchain_community.document_loaders import S3FileLoader
+from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores.utils import filter_complex_metadata
+from langchain_core.documents import Document
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langfuse import observe
+
+load_dotenv()
+logger = logging.getLogger(__name__)
 
 vectorstore = None
 all_child_chunks = []
 
-llm = ChatOpenAI(model="gpt-3.5-turbo", api_key=os.getenv("OPENAI_API_KEY"))
+# Ingestion-only metadata extractor. Tuned for flat JSON that Chroma can store;
+# do NOT swap for the main Bedrock llm without re-tuning the prompt.
+METADATA_MODEL = os.getenv("METADATA_MODEL", "gpt-3.5-turbo")
+llm = ChatOpenAI(model=METADATA_MODEL, api_key=os.getenv("OPENAI_API_KEY"))
 
 def save_child_chunks(all_child_chunks, path="child_chunks.pkl"):
     with open(path, "wb") as f:
@@ -53,14 +55,12 @@ def load_from_disk(path="parent_chunk.json"):
 
 @observe()
 def document_loading():
-    print("Loading PDF from S3...")
-    loader = S3FileLoader(
-        bucket="abilify-docs",
-        key="RAG_doc_med.pdf",
-        mode="paged"
-    )
+    bucket = os.getenv("ABILIFY_PDF_BUCKET", "abilify-docs")
+    key = os.getenv("ABILIFY_PDF_KEY", "RAG_doc_med.pdf")
+    logger.info("Loading PDF from s3://%s/%s", bucket, key)
+    loader = S3FileLoader(bucket=bucket, key=key, mode="paged")
     document = loader.load()
-    print(f"Loaded {len(document)} pages")
+    logger.info("Loaded %d pages", len(document))
     return document
 
 @observe()
@@ -128,18 +128,19 @@ Return only the JSON dictionary, nothing else."""
     response = llm.invoke(prompt)
     try:
         metadata_dict = json.loads(response.content)
-        clean_metadata = {}
-        for key, value in metadata_dict.items():
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                clean_metadata[key] = value
-        return clean_metadata
-    except:
+    except json.JSONDecodeError:
+        logger.warning("Metadata JSON parse failed for parent %s; using default", parent_id)
         return {
             "parent_id": parent_id,
             "content_type": "general",
             "drug": "unknown",
-            "population": "general"
+            "population": "general",
         }
+    clean_metadata = {}
+    for key, value in metadata_dict.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            clean_metadata[key] = value
+    return clean_metadata
 @observe()
 def child_chunk_creation(parent_chunks):
     parent_dict = {}
@@ -149,7 +150,7 @@ def child_chunk_creation(parent_chunks):
         parent_id = str(uuid.uuid4())
         parent_dict[parent_id] = chunk.page_content
         child_chunk = child_splitter.split_documents([chunk])
-        print(f"Parent chunk {i} split into {len(child_chunk)} child chunks.")
+        logger.debug("Parent %d -> %d child chunks", i, len(child_chunk))
         all_child_chunks.extend(child_chunk)
         for j in child_chunk:
             metadata_info = metadata(j, parent_id)
@@ -200,10 +201,10 @@ def initialize_retrieval():
         os.path.exists("parent_chunk.json") and
         os.path.exists("child_chunks.pkl")):
 
-        print("Loading from disk...")
+        logger.info("Loading retrieval index from disk")
         vectorstore = Chroma(
             persist_directory="./chroma_db",
-            embedding_function=OpenAIEmbeddings(model="text-embedding-3-small")
+            embedding_function=OpenAIEmbeddings(model="text-embedding-3-small"),
         )
         result = vectorstore.get(include=["documents", "metadatas"])
         all_child_chunks = [
@@ -212,20 +213,21 @@ def initialize_retrieval():
         ]
 
     elif os.path.exists("child_chunks.pkl") and os.path.exists("parent_chunk.json"):
-        print("Loading existing child chunks...")
+        logger.info("Chroma missing; rebuilding from child_chunks.pkl")
         all_child_chunks = load_child_chunks(path="child_chunks.pkl")
         vectorstore = vectorstore_creation(all_child_chunks)
 
     else:
-        print("Building from scratch...")
+        logger.info("Building retrieval index from scratch")
         documents = document_loading()
         parent_chunks = parenttext_splitting(documents)
         all_child_chunks = child_chunk_creation(parent_chunks)
         vectorstore = vectorstore_creation(all_child_chunks)
 
-    print("Retrieval initialized successfully")
+    logger.info("Retrieval initialized")
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     initialize_retrieval()
     query = "What are the side effects of Abilify?"
     results = hybrid_search_rerank(query)
